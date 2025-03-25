@@ -238,7 +238,7 @@ void	ISavestateSelectorComponent::Update( float elapsed_time [[maybe_unused]], c
 {
 	//	Trigger the save on the first update AFTER mSelectedSlot was set.
 	//	This ensures we get at least one frame where we can display "Saving..." etc.
-	if( mSelectedSlot != INVALID_SLOT && !mIsFinished )
+	if( mSelectedSlot != INVALID_SLOT && !mIsFinished && !deleteButtonTriggered )
 	{
 		mIsFinished = true;
 
@@ -248,96 +248,108 @@ void	ISavestateSelectorComponent::Update( float elapsed_time [[maybe_unused]], c
 
 		mOnSlotSelected( filename_ss.string().c_str());
 	}
-
-	if(old_buttons != new_buttons)
+    else
 	{
-	  if(mAccessType == AT_LOADING && deleteButtonTriggered)
+		if(old_buttons != new_buttons)
 		{
-		  if( new_buttons & PSP_CTRL_TRIANGLE )
+			// Player has selected a slot for deletion
+	  		if(mAccessType == AT_LOADING && deleteButtonTriggered && mSelectedSlot != INVALID_SLOT)
 			{
-				deleteSlot(mElements.GetSelectedIndex());
-			}
-		}
-
-		if( new_buttons & PSP_CTRL_UP )
-		{
-			mElements.SelectPrevious();
-			if(mAccessType == AT_LOADING)
-			    deleteButtonTriggered=false;
-		}
-		if( new_buttons & PSP_CTRL_DOWN )
-		{
-			mElements.SelectNext();
-			if(mAccessType == AT_LOADING)
-			    deleteButtonTriggered=false;
-		}
-
-		auto	element = mElements.GetSelectedElement();
-		if( element != NULL )
-		{
-			if( new_buttons & PSP_CTRL_LEFT )
-			{
-				element->OnPrevious();
-			}
-			if( new_buttons & PSP_CTRL_RIGHT )
-			{
-				element->OnNext();
-			}
-			if( new_buttons & (PSP_CTRL_CROSS|PSP_CTRL_START) )
-			{
-				// Commit settings
-				element->OnSelected();
-			}
-			if( new_buttons & PSP_CTRL_SQUARE)
-			{
-				//delete savestate
-				if(mAccessType == AT_LOADING && isDeletionAllowed)
+				// Player confirms or backs out
+		    	if( new_buttons & (PSP_CTRL_TRIANGLE|PSP_CTRL_CIRCLE))
 				{
-				  if ((mElements.GetSelectedElement())->IsSelectable())
-				    deleteButtonTriggered=true;
+					// Only delete if player confirms delete
+			    	if( new_buttons & PSP_CTRL_TRIANGLE )
+				    	deleteSlot(mSelectedSlot);
+
+					// Always Reload Screen
+					deleteButtonTriggered=false;
+					mSelectedSlot = INVALID_SLOT;
+					LoadSlots();
 				}
 
 			}
-			if( new_buttons & (PSP_CTRL_CIRCLE|PSP_CTRL_SELECT) )
+			else
 			{
-				// Discard settings
-				deleteButtonTriggered=false;
-				if(isGameRunning == false)
-				{
-				  LoadFolders();
-				  isDeletionAllowed=false;
-				}
-				else
-					mIsFinished = true;
+		    	if( new_buttons & PSP_CTRL_UP )
+		    	{
+			    	mElements.SelectPrevious();
+			    	if(mAccessType == AT_LOADING)
+			        	deleteButtonTriggered=false;
+		    	}
+		    	if( new_buttons & PSP_CTRL_DOWN )
+		    	{
+			    	mElements.SelectNext();
+			    	if(mAccessType == AT_LOADING)
+			        	deleteButtonTriggered=false;
+		    	}
+    
+		    	auto	element = mElements.GetSelectedElement();
+		    	if( element != NULL )
+		    	{
+			    	if( new_buttons & PSP_CTRL_LEFT )
+			    	{
+				    	element->OnPrevious();
+			    	}
+			    	if( new_buttons & PSP_CTRL_RIGHT )
+			    	{
+				    	element->OnNext();
+			    	}
+			    	if( new_buttons & (PSP_CTRL_CROSS|PSP_CTRL_START) )
+			    	{
+				    	// Commit settings
+				    	element->OnSelected();
+			    	}
+			    	if( new_buttons & PSP_CTRL_SQUARE)
+			    	{
+				    	// delete savestate, use element selection so correct save state is removed
+				    	if(mAccessType == AT_LOADING && isDeletionAllowed)
+				    	{
+				      		if ((mElements.GetSelectedElement())->IsSelectable())
+				      		{
+				        		deleteButtonTriggered=true;
+					    		element->OnSelected();
+				      		}
+				    	}
+
+			    	}
+			    	if( new_buttons & (PSP_CTRL_CIRCLE|PSP_CTRL_SELECT) )
+			    	{
+				    	// Discard settings
+				    	deleteButtonTriggered=false;
+				    	if(isGameRunning == false)
+				    	{
+				      		LoadFolders();
+				      		isDeletionAllowed=false;
+				    	}
+				    	else
+					    	mIsFinished = true;
+			    	}
+		    	}
 			}
 		}
 	}
 }
 
-// Disabled for now, will be fixed soon
-void	ISavestateSelectorComponent::deleteSlot(u32 slot_idx [[maybe_unused]])
+void	ISavestateSelectorComponent::deleteSlot(u32 slot_idx)
 {
-	// To reimplement we need to define path and sub_path for local SaveStates Directory and ms0:/n64 (maybe)
-	
-	// if (std::filesystem::exists(path))
-    // {
-    //   remove(path);
-    //   deleteButtonTriggered=false;
-    //   LoadSlots();
-    // }
+	// Make the slot paths, check for files, then delete them
+    std::filesystem::path filename_ss;
+    std::filesystem::path filename_png;
+    MakeSaveSlotPath( filename_ss, filename_png, slot_idx, current_slot_path );
+				
+    if (std::filesystem::exists(filename_ss))
+        remove(filename_ss);
 
-	// if (std::filesystem::exists(png_path))
-    // {
-    //   remove(png_path);
-    //   deleteButtonTriggered=false;
-    //   LoadSlots();
-    // }
+    if (std::filesystem::exists(filename_png))
+        remove(filename_png);
+
 }
 void	ISavestateSelectorComponent::Render()
 {
 	const u32	font_height = mpContext->GetFontHeight();
 
-	if( mSelectedSlot == INVALID_SLOT )
+	if( mSelectedSlot == INVALID_SLOT || deleteButtonTriggered )
 	{
 		mElements.Draw( mpContext, LIST_TEXT_LEFT, LIST_TEXT_WIDTH, AT_LEFT, BELOW_MENU_MIN + 30 - mElements.GetSelectedIndex()*(font_height+2) );
 
@@ -369,14 +381,17 @@ void	ISavestateSelectorComponent::Render()
 			// Render Text 
 			const std::string& p_description = element->GetDescription();
 
-			mpContext->DrawTextArea( DESCRIPTION_AREA_LEFT,
-									 DESCRIPTION_AREA_TOP,
-									 DESCRIPTION_AREA_RIGHT - DESCRIPTION_AREA_LEFT,
-									 DESCRIPTION_AREA_BOTTOM - DESCRIPTION_AREA_TOP,
-									 p_description,
-									 DrawTextUtilities::TextWhite,
-									 VA_BOTTOM );
+			s32 y = mpContext->GetScreenHeight() - (font_height / 2);
+	    	if (deleteButtonTriggered)
+			{
+				mpContext->DrawTextAlign( 0, mpContext->GetScreenWidth(), AT_CENTRE, y, "Delete selected savestate [/\\:confirm O:back]", DrawTextUtilities::TextRed );
+			}
+			else
+			{
+				mpContext->DrawTextAlign( 0, mpContext->GetScreenWidth(), AT_CENTRE, y, p_description, DrawTextUtilities::TextWhite );
+			}
 		}
+
 	}
 	else
 	{
@@ -386,8 +401,6 @@ void	ISavestateSelectorComponent::Render()
 		mpContext->DrawTextAlign( 0, mpContext->GetScreenWidth(), AT_CENTRE, y, title_text, mpContext->GetDefaultTextColour() );
 	}
 
-	if(deleteButtonTriggered)
-	  mpContext->DrawTextAlign(0,SCREEN_HEIGHT,AT_CENTRE,135,"Press Delete Button to delete this savestate",DrawTextUtilities::TextRed,DrawTextUtilities::TextWhite);
 }
 
 
