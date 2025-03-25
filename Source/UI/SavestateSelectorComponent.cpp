@@ -72,13 +72,12 @@ class ISavestateSelectorComponent : public CSavestateSelectorComponent
 		u32					mSelectedSlot;
 		bool					mIsFinished;
 		bool	deleteButtonTriggered;
+		bool	isLoadingSlots;
 
 		CUIElementBag				mElements;
 		std::vector<std::string> 		mElementTitle;
 		bool					mSlotEmpty[ NUM_SAVESTATE_SLOTS ];
-		std::filesystem::path		mPVFilename[ NUM_SAVESTATE_SLOTS ];
 		std::filesystem::path		mPVScreenShot [ NUM_SAVESTATE_SLOTS ];
-		s8						mPVExists[ NUM_SAVESTATE_SLOTS ];	//0=skip, 1=file exists, -1=show no preview
 		std::shared_ptr<CNativeTexture>	mPreviewTexture;
 		u32						mLastPreviewLoad;
 
@@ -126,11 +125,13 @@ ISavestateSelectorComponent::ISavestateSelectorComponent( CUIContext * p_context
 
 	if(!running_rom.empty()){
 		isGameRunning = true;
+		isLoadingSlots = true;
 		current_slot_path = running_rom;
 		LoadSlots();
 		isDeletionAllowed=true;
 	} else {
 		isGameRunning = false;
+		isLoadingSlots = false;
 		LoadFolders();
 		isDeletionAllowed=false;
 	}
@@ -138,61 +139,60 @@ ISavestateSelectorComponent::ISavestateSelectorComponent( CUIContext * p_context
 
 void ISavestateSelectorComponent::LoadFolders() {
     u32 folderIndex = 0;
-    const char* const description_text = (mAccessType == AT_SAVING) ? "Select the slot in which to save" : "Select the slot from which to load";
+    const char* const description_text = "";
 
     // Clear unused vector or perform any other necessary cleanup
     mElements.Clear();
+    mLastPreviewLoad = ~0;
+
+	isLoadingSlots = false;
 
     // Clear variables if needed
     for (u32 i = 0; i < NUM_SAVESTATE_SLOTS; ++i) {
-        mPVExists[i] = 0;
-        mLastPreviewLoad = ~0;
+		mPVScreenShot[i] = std::filesystem::path();
     }
-		std::filesystem::path saveStateDir = setBasePath("SaveStates");
-		for( const auto& entry : std::filesystem::directory_iterator(saveStateDir))
+
+	std::filesystem::path saveStateDir = setBasePath("SaveStates");
+	for( const auto& entry : std::filesystem::directory_iterator(saveStateDir))
+	{
+		if (entry.is_directory()) 
 		{
-			if (entry.is_directory()) 
+			std::string directoryName = entry.path().filename().string();
+			if ((directoryName.size() > 2) && (directoryName != ".git"))
 			{
-				std::string directoryName = entry.path().filename().string();
-				if ((directoryName.size() > 2) && (directoryName != ".git"))
-				{
-					std::string str = directoryName;
-					auto onSelected = [this, folderIndex]() { OnFolderSelected(folderIndex); };
-					std::function<void()> functor = onSelected;
-					auto element = std::make_unique<CUICommandImpl>(functor, str, description_text);
-					mElements.Add(std::move(element));
-					mElementTitle.push_back(directoryName);
-					folderIndex++; 
-				}
+				std::string str = directoryName;
+				auto onSelected = [this, folderIndex]() { OnFolderSelected(folderIndex); };
+				std::function<void()> functor = onSelected;
+				auto element = std::make_unique<CUICommandImpl>(functor, str, description_text);
+				mElements.Add(std::move(element));
+				mElementTitle.push_back(directoryName);
+				folderIndex++; 
 			}
 		}
+	}
 }
 void ISavestateSelectorComponent::LoadSlots() {
-    const char* description_text = (mAccessType == AT_SAVING) ? "Select the slot in which to save [X:save O:back]" : "Select the slot from which to load [X:load O:back []:delete]";
+    const char* description_text = "";
     char date_string[30];
+	u32 elementIdx = 0;
     
     // Clear unused vector
     mElements.Clear();
     mLastPreviewLoad = ~0;
+	isLoadingSlots = true;
 
     for (u32 i = 0; i < NUM_SAVESTATE_SLOTS; ++i) {
        std::string str = std::string("Slot ") + std::to_string(i + 1);
 		 
-        // std::filesystem::path filename_ss;
-        MakeSaveSlotPath(mPVFilename [i], mPVScreenShot[i], i, current_slot_path);
-		// Is outputting filenames correctly
-        mPVExists[i] = std::filesystem::exists(mPVFilename[i]) ? 1 : -1;
+        std::filesystem::path filename_ss;
+        std::filesystem::path filename_png;
+        MakeSaveSlotPath(filename_ss, filename_png, i, current_slot_path);
 
-		// Don't show unused slots on loading
-		if (mAccessType == AT_LOADING && mPVExists[i]  != 1)
-		{
-			continue;
-		}
-        if (mPVExists[i] == 1) {
+        if (std::filesystem::exists(filename_ss) == 1) {
 
             // stat the save file
             struct stat st;
-            stat(mPVFilename[i].c_str(), &st);
+            stat(filename_ss.c_str(), &st);
 
             // get the last modification time from the save file
             std::time_t modificationTime = st.st_mtime;
@@ -210,22 +210,30 @@ void ISavestateSelectorComponent::LoadSlots() {
 
             mSlotEmpty[i] = false;
 
-         } else {
-             str = "Empty";
-             mSlotEmpty[i] = true;
-        }
+			// Update screenshot array based on element position, not slot position
+			mPVScreenShot[elementIdx] = filename_png;
 
-        // Create UI elements based on slot availability
-        std::unique_ptr<CUIElement> element = nullptr;
-        if (mAccessType == AT_LOADING && mSlotEmpty[i]) {
-            element = std::make_unique<CUICommandDummy>(str.c_str(), description_text);
+        }
+		// Don't show unused slots on loading
+		else if (mAccessType == AT_LOADING )
+		{
+            mSlotEmpty[i] = true;
+			continue;
+		// Otherwise show empty slots
         } else {
-            auto onSelected = [this, i]() { OnSlotSelected(i); };
-            std::function<void()> functor = onSelected;
-            element = std::make_unique<CUICommandImpl>(functor, str.c_str(), description_text);
+            str = "Empty";
+            mSlotEmpty[i] = true;
         }
 
+        // Create UI elements
+        std::unique_ptr<CUIElement> element = nullptr;
+        auto onSelected = [this, i]() { OnSlotSelected(i); };
+        std::function<void()> functor = onSelected;
+        element = std::make_unique<CUICommandImpl>(functor, str.c_str(), description_text);
         mElements.Add(std::move(element));
+
+		// increment element idx
+		elementIdx++;
     }
 }
 
@@ -349,15 +357,19 @@ void	ISavestateSelectorComponent::Render()
 {
 	const u32	font_height = mpContext->GetFontHeight();
 
+	// No slot selected for load or slot selected for delete
 	if( mSelectedSlot == INVALID_SLOT || deleteButtonTriggered )
 	{
 		mElements.Draw( mpContext, LIST_TEXT_LEFT, LIST_TEXT_WIDTH, AT_LEFT, BELOW_MENU_MIN + 30 - mElements.GetSelectedIndex()*(font_height+2) );
 
-		auto element = mElements.GetSelectedElement();
-		if( element != NULL )
+		// only load screen shots for slots, not directories
+		if (isLoadingSlots)
 		{
 
-			if( mPVExists[ mElements.GetSelectedIndex() ] == 1 )
+			s8 mPVExists = 0;
+			mPVExists = std::filesystem::exists(mPVScreenShot[ mElements.GetSelectedIndex() ]) ? 1 : -1;
+
+			if( mPVExists == 1 )
 			{
 				// Render Preview Image
 				glm::vec2	tl( PREVIEW_IMAGE_LEFT+2, BELOW_MENU_MIN+2 );
@@ -365,34 +377,34 @@ void	ISavestateSelectorComponent::Render()
 
 				if( mPreviewTexture == NULL || mElements.GetSelectedIndex() != mLastPreviewLoad )
 				{
-					mPreviewTexture = CNativeTexture::CreateFromPng( mPVFilename[ mElements.GetSelectedIndex() ], TexFmt_8888 );
+					mPreviewTexture = CNativeTexture::CreateFromPng( mPVScreenShot[ mElements.GetSelectedIndex() ], TexFmt_8888 );
 					mLastPreviewLoad = mElements.GetSelectedIndex();
 				}
 
 				mpContext->DrawRect( PREVIEW_IMAGE_LEFT, BELOW_MENU_MIN, PREVIEW_IMAGE_WIDTH, PREVIEW_IMAGE_HEIGHT, c32::Black );
 				mpContext->RenderTexture( mPreviewTexture, tl, wh, c32::White );
 			}
-			else if( mPVExists[ mElements.GetSelectedIndex() ] == -1 && mElements.GetSelectedIndex() < NUM_SAVESTATE_SLOTS )
+			else if( mPVExists == -1 && mElements.GetSelectedIndex() < NUM_SAVESTATE_SLOTS )
 			{
 				mpContext->DrawRect( PREVIEW_IMAGE_LEFT, BELOW_MENU_MIN, PREVIEW_IMAGE_WIDTH, PREVIEW_IMAGE_HEIGHT, c32::Black );
 				mpContext->DrawRect( PREVIEW_IMAGE_LEFT+2, BELOW_MENU_MIN+2, PREVIEW_IMAGE_WIDTH-4, PREVIEW_IMAGE_HEIGHT-4, c32::Black );
 				mpContext->DrawTextAlign( PREVIEW_IMAGE_LEFT, PREVIEW_IMAGE_LEFT + PREVIEW_IMAGE_WIDTH, AT_CENTRE, BELOW_MENU_MIN+PREVIEW_IMAGE_HEIGHT/2, "No Preview Available", c32::White );
 			}
-			// Render Text 
-			const std::string& p_description = element->GetDescription();
-
-			s32 y = mpContext->GetScreenHeight() - (font_height / 2);
-	    	if (deleteButtonTriggered)
-			{
-				mpContext->DrawTextAlign( 0, mpContext->GetScreenWidth(), AT_CENTRE, y, "Delete selected savestate [/\\:confirm O:back]", DrawTextUtilities::TextRed );
-			}
-			else
-			{
-				mpContext->DrawTextAlign( 0, mpContext->GetScreenWidth(), AT_CENTRE, y, p_description, DrawTextUtilities::TextWhite );
-			}
 		}
 
+		// Render Available Action Text
+		s32 y = mpContext->GetScreenHeight() - (font_height / 2);
+    	if (deleteButtonTriggered)
+			mpContext->DrawTextAlign( 0, mpContext->GetScreenWidth(), AT_CENTRE, y, "Delete selected savestate [/\\:confirm O:back]", DrawTextUtilities::TextRed );
+		else if ( !isLoadingSlots )
+			mpContext->DrawTextAlign( 0, mpContext->GetScreenWidth(), AT_CENTRE, y, "Select a game from which to load [X:select]", DrawTextUtilities::TextWhite );
+		else if (mAccessType == AT_SAVING) 
+			mpContext->DrawTextAlign( 0, mpContext->GetScreenWidth(), AT_CENTRE, y, "Select the slot in which to save [X:save O:back]", DrawTextUtilities::TextWhite );
+		else if (mAccessType == AT_LOADING) 
+			mpContext->DrawTextAlign( 0, mpContext->GetScreenWidth(), AT_CENTRE, y, "Select the slot from which to load [X:load O:back []:delete]", DrawTextUtilities::TextWhite );
+
 	}
+	// Slot selected, display Loading or Saving screen
 	else
 	{
 		const char * title_text = mAccessType == AT_SAVING ? SAVING_STATUS_TEXT : LOADING_STATUS_TEXT;
