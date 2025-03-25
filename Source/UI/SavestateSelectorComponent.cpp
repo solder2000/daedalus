@@ -22,7 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 
 #include <filesystem>
-
+#include <sys/stat.h>
 #include <chrono>
 #include <iostream>
 #include <string_view>
@@ -190,7 +190,26 @@ void ISavestateSelectorComponent::LoadSlots() {
 		}
         if (mPVExists[i] == 1) {
 
+            // stat the save file
+            struct stat st;
+            stat(mPVFilename[i].c_str(), &st);
+
+            // get the last modification time from the save file
+            std::time_t modificationTime = st.st_mtime;
+
+            // convert to localtime
+            std::tm* timeinfo = std::localtime(&modificationTime);
+
+            // fix the date
+            timeinfo->tm_year -= 1900;
+            timeinfo->tm_mon -= 1;
+
+            // Format the date string
+            std::strftime(date_string, sizeof(date_string), ": %m/%d/%Y %H:%M:%S", timeinfo);
+            str += date_string;
+
             mSlotEmpty[i] = false;
+
          } else {
              str = "Empty";
              mSlotEmpty[i] = true;
