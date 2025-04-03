@@ -63,23 +63,24 @@ class ISavestateSelectorComponent : public CSavestateSelectorComponent
 		void				LoadFolders();
 		void				LoadSlots();
 		void				deleteSlot(u32 id_ss);
-		bool					isDeletionAllowed;
+		bool				isDeletionAllowed;
 
 	private:
 		EAccessType				mAccessType;
 		std::function<void(const char *)> 	mOnSlotSelected;
 
-		u32					mSelectedSlot;
-		bool					mIsFinished;
+		u32		mSelectedSlot;
+		bool	mIsFinished;
 		bool	deleteButtonTriggered;
+		bool	deleteConfirmTriggered;
 		bool	isLoadingSlots;
 
 		CUIElementBag				mElements;
-		std::vector<std::string> 		mElementTitle;
-		bool					mSlotEmpty[ NUM_SAVESTATE_SLOTS ];
+		std::vector<std::string> 	mElementTitle;
+		bool						mSlotEmpty[ NUM_SAVESTATE_SLOTS ];
 		std::filesystem::path		mPVScreenShot [ NUM_SAVESTATE_SLOTS ];
 		std::shared_ptr<CNativeTexture>	mPreviewTexture;
-		u32						mLastPreviewLoad;
+		u32							mLastPreviewLoad;
 
 };
 
@@ -120,7 +121,10 @@ ISavestateSelectorComponent::ISavestateSelectorComponent( CUIContext * p_context
 ,	mOnSlotSelected( on_slot_selected )
 ,	mSelectedSlot( INVALID_SLOT )
 ,	mIsFinished( false )
-,	deleteButtonTriggered(false)
+,	mPreviewTexture ( nullptr )
+,   isLoadingSlots ( false )
+,	deleteButtonTriggered( false )
+,	deleteConfirmTriggered( false )
 {
 
 	if(!running_rom.empty()){
@@ -131,7 +135,6 @@ ISavestateSelectorComponent::ISavestateSelectorComponent( CUIContext * p_context
 		isDeletionAllowed=true;
 	} else {
 		isGameRunning = false;
-		isLoadingSlots = false;
 		LoadFolders();
 		isDeletionAllowed=false;
 	}
@@ -178,11 +181,13 @@ void ISavestateSelectorComponent::LoadSlots() {
     
     // Clear unused vector
     mElements.Clear();
+	mPreviewTexture = nullptr;
     mLastPreviewLoad = ~0;
 	isLoadingSlots = true;
+	mSelectedSlot = INVALID_SLOT;
 
     for (u32 i = 0; i < NUM_SAVESTATE_SLOTS; ++i) {
-       std::string str = std::string("Slot ") + std::to_string(i + 1);
+    	std::string str = std::string("Slot ") + std::to_string(i + 1);
 		 
         std::filesystem::path filename_ss;
         std::filesystem::path filename_png;
@@ -241,12 +246,11 @@ void ISavestateSelectorComponent::LoadSlots() {
 
 ISavestateSelectorComponent::~ISavestateSelectorComponent() {}
 
-
 void	ISavestateSelectorComponent::Update( float elapsed_time [[maybe_unused]], const glm::vec2 & stick [[maybe_unused]], [[maybe_unused]] u32 old_buttons, u32 new_buttons )
 {
 	//	Trigger the save on the first update AFTER mSelectedSlot was set.
 	//	This ensures we get at least one frame where we can display "Saving..." etc.
-	if( mSelectedSlot != INVALID_SLOT && !mIsFinished && !deleteButtonTriggered )
+	if( mSelectedSlot != INVALID_SLOT && !mIsFinished && !deleteButtonTriggered && !deleteConfirmTriggered)
 	{
 		mIsFinished = true;
 
@@ -254,86 +258,94 @@ void	ISavestateSelectorComponent::Update( float elapsed_time [[maybe_unused]], c
 		std::filesystem::path filename_png;
 		MakeSaveSlotPath( filename_ss, filename_png, mSelectedSlot, current_slot_path );
 
+		mPreviewTexture.reset();
 		mOnSlotSelected( filename_ss.string().c_str());
 	}
-    else
+
+	// Delete confirmation
+	if(mSelectedSlot != INVALID_SLOT && !mIsFinished && deleteConfirmTriggered)
 	{
-		if(old_buttons != new_buttons)
+		// Delete the slot
+		deleteSlot(mSelectedSlot);
+		// Clear the flags
+		deleteButtonTriggered=false;
+		deleteConfirmTriggered=false;
+		mSelectedSlot = INVALID_SLOT;
+		// Reload the slots
+		LoadSlots();
+	}
+
+	// Did player push a button?
+	if(old_buttons != new_buttons)
+	{
+		// Player has selected to delete a slot
+		if( deleteButtonTriggered )
 		{
-			// Player has selected a slot for deletion
-	  		if(mAccessType == AT_LOADING && deleteButtonTriggered && mSelectedSlot != INVALID_SLOT)
+			if( new_buttons & PSP_CTRL_TRIANGLE && mSelectedSlot != INVALID_SLOT)
+				deleteConfirmTriggered=true;
+
+			// Player backs out or slot not selected
+			if( new_buttons & (PSP_CTRL_CIRCLE|PSP_CTRL_SELECT)  || mSelectedSlot == INVALID_SLOT)
 			{
-				// Player confirms or backs out
-		    	if( new_buttons & (PSP_CTRL_TRIANGLE|PSP_CTRL_CIRCLE))
-				{
-					// Only delete if player confirms delete
-			    	if( new_buttons & PSP_CTRL_TRIANGLE )
-				    	deleteSlot(mSelectedSlot);
-
-					// Always Reload Screen
-					deleteButtonTriggered=false;
-					mSelectedSlot = INVALID_SLOT;
-					LoadSlots();
-				}
-
+				// Discard settings
+				deleteButtonTriggered=false;
+				deleteConfirmTriggered=false;
+				mSelectedSlot = INVALID_SLOT;
 			}
-			else
+		}
+		else
 			{
-		    	if( new_buttons & PSP_CTRL_UP )
-		    	{
-			    	mElements.SelectPrevious();
-			    	if(mAccessType == AT_LOADING)
-			        	deleteButtonTriggered=false;
-		    	}
-		    	if( new_buttons & PSP_CTRL_DOWN )
-		    	{
-			    	mElements.SelectNext();
-			    	if(mAccessType == AT_LOADING)
-			        	deleteButtonTriggered=false;
-		    	}
-    
-		    	auto	element = mElements.GetSelectedElement();
-		    	if( element != NULL )
-		    	{
-			    	if( new_buttons & PSP_CTRL_LEFT )
-			    	{
-				    	element->OnPrevious();
-			    	}
-			    	if( new_buttons & PSP_CTRL_RIGHT )
-			    	{
-				    	element->OnNext();
-			    	}
-			    	if( new_buttons & (PSP_CTRL_CROSS|PSP_CTRL_START) )
-			    	{
-				    	// Commit settings
-				    	element->OnSelected();
-			    	}
-			    	if( new_buttons & PSP_CTRL_SQUARE)
-			    	{
-				    	// delete savestate, use element selection so correct save state is removed
-				    	if(mAccessType == AT_LOADING && isDeletionAllowed)
-				    	{
-				      		if ((mElements.GetSelectedElement())->IsSelectable())
-				      		{
-				        		deleteButtonTriggered=true;
-					    		element->OnSelected();
-				      		}
-				    	}
 
-			    	}
-			    	if( new_buttons & (PSP_CTRL_CIRCLE|PSP_CTRL_SELECT) )
-			    	{
-				    	// Discard settings
-				    	deleteButtonTriggered=false;
-				    	if(isGameRunning == false)
-				    	{
-				      		LoadFolders();
-				      		isDeletionAllowed=false;
-				    	}
-				    	else
-					    	mIsFinished = true;
-			    	}
-		    	}
+			if( new_buttons & PSP_CTRL_UP )
+			{
+				mElements.SelectPrevious();
+				if(mAccessType == AT_LOADING)
+					deleteButtonTriggered=false;
+			}
+			if( new_buttons & PSP_CTRL_DOWN )
+			{
+				mElements.SelectNext();
+				if(mAccessType == AT_LOADING)
+					deleteButtonTriggered=false;
+			}
+
+			auto	element = mElements.GetSelectedElement();
+			if( element != NULL )
+			{
+				if( new_buttons & PSP_CTRL_LEFT )
+				{
+					element->OnPrevious();
+				}
+				if( new_buttons & PSP_CTRL_RIGHT )
+				{
+					element->OnNext();
+				}
+				if( new_buttons & (PSP_CTRL_CROSS|PSP_CTRL_START) )
+				{
+					// Select Slot for Load
+					element->OnSelected();
+				}
+				// delete savestate, use element selection so correct save state is removed
+				if( new_buttons & PSP_CTRL_SQUARE && mAccessType == AT_LOADING && isDeletionAllowed )
+				{
+					deleteButtonTriggered=true;
+					element->OnSelected();
+				}
+				// Player is backing out of menu
+				if( new_buttons & (PSP_CTRL_CIRCLE|PSP_CTRL_SELECT) )
+				{
+					// Discard settings
+					deleteButtonTriggered=false;
+					deleteConfirmTriggered=false;
+					mSelectedSlot = INVALID_SLOT;
+					if(isGameRunning == false)
+					{
+						LoadFolders();
+						isDeletionAllowed=false;
+					}
+					else
+						mIsFinished = true;
+				}
 			}
 		}
 	}
@@ -356,6 +368,10 @@ void	ISavestateSelectorComponent::deleteSlot(u32 slot_idx)
 void	ISavestateSelectorComponent::Render()
 {
 	const u32	font_height = mpContext->GetFontHeight();
+	const s32	y = mpContext->GetScreenHeight() - (font_height / 2);
+
+	s8 mPVExists = 0;
+	std::filesystem::path filename_png;
 
 	// No slot selected for load or slot selected for delete
 	if( mSelectedSlot == INVALID_SLOT || deleteButtonTriggered )
@@ -366,8 +382,8 @@ void	ISavestateSelectorComponent::Render()
 		if (isLoadingSlots)
 		{
 
-			s8 mPVExists = 0;
-			mPVExists = std::filesystem::exists(mPVScreenShot[ mElements.GetSelectedIndex() ]) ? 1 : -1;
+			filename_png = mPVScreenShot[ mElements.GetSelectedIndex() ];
+			mPVExists = std::filesystem::is_regular_file(filename_png) ? 1 : -1;
 
 			if( mPVExists == 1 )
 			{
@@ -375,14 +391,15 @@ void	ISavestateSelectorComponent::Render()
 				glm::vec2	tl( PREVIEW_IMAGE_LEFT+2, BELOW_MENU_MIN+2 );
 				glm::vec2	wh( PREVIEW_IMAGE_WIDTH-4, PREVIEW_IMAGE_HEIGHT-4 );
 
-				if( mPreviewTexture == NULL || mElements.GetSelectedIndex() != mLastPreviewLoad )
+				if( mPreviewTexture == nullptr || mElements.GetSelectedIndex() != mLastPreviewLoad )
 				{
-					mPreviewTexture = CNativeTexture::CreateFromPng( mPVScreenShot[ mElements.GetSelectedIndex() ], TexFmt_8888 );
-					mLastPreviewLoad = mElements.GetSelectedIndex();
+					mPreviewTexture = CNativeTexture::CreateFromPng( filename_png.c_str() , TexFmt_8888 );
+					mLastPreviewLoad = mElements.GetSelectedIndex();	
 				}
 
 				mpContext->DrawRect( PREVIEW_IMAGE_LEFT, BELOW_MENU_MIN, PREVIEW_IMAGE_WIDTH, PREVIEW_IMAGE_HEIGHT, c32::Black );
 				mpContext->RenderTexture( mPreviewTexture, tl, wh, c32::White );
+				
 			}
 			else if( mPVExists == -1 && mElements.GetSelectedIndex() < NUM_SAVESTATE_SLOTS )
 			{
@@ -393,7 +410,6 @@ void	ISavestateSelectorComponent::Render()
 		}
 
 		// Render Available Action Text
-		s32 y = mpContext->GetScreenHeight() - (font_height / 2);
     	if (deleteButtonTriggered)
 			mpContext->DrawTextAlign( 0, mpContext->GetScreenWidth(), AT_CENTRE, y, "Delete selected savestate [/\\:confirm O:back]", DrawTextUtilities::TextRed );
 		else if ( !isLoadingSlots )
@@ -408,8 +424,6 @@ void	ISavestateSelectorComponent::Render()
 	else
 	{
 		const char * title_text = mAccessType == AT_SAVING ? SAVING_STATUS_TEXT : LOADING_STATUS_TEXT;
-
-		s32 y = mpContext->GetScreenHeight() - (font_height / 2);
 		mpContext->DrawTextAlign( 0, mpContext->GetScreenWidth(), AT_CENTRE, y, title_text, mpContext->GetDefaultTextColour() );
 	}
 
